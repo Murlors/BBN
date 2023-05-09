@@ -83,7 +83,7 @@ def img_source_to_target(src_img, trg_img, L=0.1):
     fft_src_[..., 1] = torch.sin(pha_src.clone()) * amp_src_.clone()
 
     # get the recomposed image: source content, target style
-    _, _, imgH, imgW = src_img.size()
+    # _, _, imgH, imgW = src_img.size()
     src_in_trg = torch.fft.ifft2(torch.complex(fft_src_[..., 0], fft_src_[..., 1]), dim=(-2, -1)).real
 
     return src_in_trg

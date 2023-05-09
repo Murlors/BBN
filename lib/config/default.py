@@ -2,9 +2,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-
 from yacs.config import CfgNode as CN
-
 
 _C = CN()
 
@@ -21,7 +19,6 @@ _C.RESUME_MODEL = ""
 _C.RESUME_MODE = "all"
 _C.CPU_MODE = False
 _C.EVAL_MODE = False
-
 
 # ----- DATASET BUILDER -----
 _C.DATASET = CN()
@@ -40,7 +37,6 @@ _C.BACKBONE.TYPE = "res50"
 _C.BACKBONE.FREEZE = False
 _C.BACKBONE.PRETRAINED_MODEL = ""
 
-
 # ----- MODULE BUILDER -----
 _C.MODULE = CN()
 _C.MODULE.TYPE = "GAP"
@@ -50,7 +46,6 @@ _C.CLASSIFIER = CN()
 _C.CLASSIFIER.TYPE = "FC"
 _C.CLASSIFIER.BIAS = True
 
-
 # ----- LOSS BUILDER -----
 _C.LOSS = CN()
 _C.LOSS.LOSS_TYPE = "CrossEntropy"
@@ -59,7 +54,7 @@ _C.LOSS.CSCE = CN()
 _C.LOSS.CSCE.SCHEDULER = "default"
 _C.LOSS.CSCE.DRW_EPOCH = 160
 
-_C.LOSS.LDAM= CN()
+_C.LOSS.LDAM = CN()
 _C.LOSS.LDAM.DRW_EPOCH = 160
 _C.LOSS.LDAM.MAX_MARGIN = 0.5
 
@@ -94,7 +89,6 @@ _C.TRAIN.OPTIMIZER.BASE_LR = 0.001
 _C.TRAIN.OPTIMIZER.MOMENTUM = 0.9
 _C.TRAIN.OPTIMIZER.WEIGHT_DECAY = 1e-4
 
-
 _C.TRAIN.LR_SCHEDULER = CN()
 _C.TRAIN.LR_SCHEDULER.TYPE = "multistep"
 _C.TRAIN.LR_SCHEDULER.LR_STEP = [40, 50]
@@ -108,6 +102,7 @@ _C.TEST.BATCH_SIZE = 32
 _C.TEST.NUM_WORKERS = 8
 _C.TEST.MODEL_FILE = ""
 
+# transforms
 _C.TRANSFORMS = CN()
 _C.TRANSFORMS.TRAIN_TRANSFORMS = ("random_resized_crop", "random_horizontal_flip")
 _C.TRANSFORMS.TEST_TRANSFORMS = ("shorter_resize_for_crop", "center_crop")
@@ -118,6 +113,10 @@ _C.TRANSFORMS.PROCESS_DETAIL.RANDOM_CROP.PADDING = 4
 _C.TRANSFORMS.PROCESS_DETAIL.RANDOM_RESIZED_CROP = CN()
 _C.TRANSFORMS.PROCESS_DETAIL.RANDOM_RESIZED_CROP.SCALE = (0.08, 1.0)
 _C.TRANSFORMS.PROCESS_DETAIL.RANDOM_RESIZED_CROP.RATIO = (0.75, 1.333333333)
+
+# fourier
+_C.FOURIER = CN()
+_C.FOURIER.LAMBDA = 0.01
 
 
 def update_config(cfg, args):
