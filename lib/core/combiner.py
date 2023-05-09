@@ -1,6 +1,8 @@
 import numpy as np
 import torch, math
 from core.evaluate import accuracy
+from fourier.fourier import features_source_to_target, img_source_to_target
+
 
 class Combiner:
     def __init__(self, cfg, device):
@@ -65,3 +67,34 @@ class Combiner:
 
         return loss, now_acc
 
+    def bbn_mix_features(self, model, criterion, image, label, meta, **kwargs):
+        image_a, image_b = image.to(self.device), meta["sample_image"].to(self.device)
+        label_a, label_b = label.to(self.device), meta["sample_label"].to(self.device)
+
+        feature_a, feature_b = (
+            model(image_a, feature_cb=True),
+            model(image_b, feature_rb=True),
+        )
+
+        feature_b = img_source_to_target(feature_b.view(-1, 8, 8), feature_a.view(-1, 8, 8))
+        feature_b = feature_b.view(-1, 64).cuda()
+
+        l = 1 - ((self.epoch - 1) / self.div_epoch) ** 2  # parabolic decay
+        # l = 0.5  # fix
+        # l = math.cos((self.epoch-1) / self.div_epoch * math.pi /2)   # cosine decay
+        # l = 1 - (1 - ((self.epoch - 1) / self.div_epoch) ** 2) * 1  # parabolic increment
+        # l = 1 - (self.epoch-1) / self.div_epoch  # linear decay
+        # l = np.random.beta(self.alpha, self.alpha) # beta distribution
+        # l = 1 if self.epoch <= 120 else 0  # seperated stage
+
+        mixed_feature = 2 * torch.cat((l * feature_a, (1 - l) * feature_b), dim=1)
+        output = model(mixed_feature, classifier_flag=True)
+        loss = l * criterion(output, label_a) + (1 - l) * criterion(output, label_b)
+
+        now_result = torch.argmax(self.func(output), 1)
+        now_acc = (
+                l * accuracy(now_result.cpu().numpy(), label_a.cpu().numpy())[0]
+                + (1 - l) * accuracy(now_result.cpu().numpy(), label_b.cpu().numpy())[0]
+        )
+
+        return loss, now_acc
