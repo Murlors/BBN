@@ -21,12 +21,12 @@ Reference:
 If you use this implementation in you work, please don't forget to mention the
 author, Yerlan Idelbayev.
 """
+import queue
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.init as init
-
 
 __all__ = [
     "ResNet",
@@ -37,6 +37,8 @@ __all__ = [
     "resnet110",
     "resnet1202",
 ]
+
+from fourier.fourier import img_source_to_target
 
 
 def _weights_init(m):
@@ -150,6 +152,7 @@ class ResNet_Cifar(nn.Module):
         out = self.layer3(out)
         return out
 
+
 class BBN_ResNet_Cifar(nn.Module):
     def __init__(self, block, num_blocks):
         super(BBN_ResNet_Cifar, self).__init__()
@@ -157,11 +160,12 @@ class BBN_ResNet_Cifar(nn.Module):
 
         self.conv1 = nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(16)
+        # share weight block
         self.layer1 = self._make_layer(block, 16, num_blocks[0], stride=1)
         self.layer2 = self._make_layer(block, 32, num_blocks[1], stride=2)
         self.layer3 = self._make_layer(block, 64, num_blocks[2] - 1, stride=2)
-        self.cb_block = block(self.in_planes, self.in_planes, stride=1)
-        self.rb_block = block(self.in_planes, self.in_planes, stride=1)
+        self.cb_block = block(self.in_planes, self.in_planes, stride=1)  # Conventional Learning Branch
+        self.rb_block = block(self.in_planes, self.in_planes, stride=1)  # Re-Balancing Branch
 
         self.apply(_weights_init)
 
@@ -195,9 +199,9 @@ class BBN_ResNet_Cifar(nn.Module):
 
     def forward(self, x, **kwargs):
         out = F.relu(self.bn1(self.conv1(x)))
-        out = self.layer1(out)
-        out = self.layer2(out)
-        out = self.layer3(out)
+        out = self.layer1(out)  # 1x16x32x32
+        out = self.layer2(out)  # 1x32x16x16
+        out = self.layer3(out)  # 1x64x8x8
         if "feature_cb" in kwargs:
             out = self.cb_block(out)
             return out
@@ -211,11 +215,93 @@ class BBN_ResNet_Cifar(nn.Module):
 
         return out
 
+
+class BBN_ResNet_Cifar_Mix(nn.Module):
+    def __init__(self, cfg, block, num_blocks):
+        super(BBN_ResNet_Cifar_Mix, self).__init__()
+        self.cfg = cfg
+        self.in_planes = 16
+
+        self.conv1 = nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(16)
+        # share weight block
+        self.layer1 = self._make_layer(block, 16, num_blocks[0], stride=1)
+        self.layer2 = self._make_layer(block, 32, num_blocks[1], stride=2)
+        self.layer3 = self._make_layer(block, 64, num_blocks[2] - 1, stride=2)
+        self.cb_block = block(self.in_planes, self.in_planes, stride=1)  # Conventional Learning Branch
+        self.rb_block = block(self.in_planes, self.in_planes, stride=1)  # Re-Balancing Branch
+
+        self.apply(_weights_init)
+
+        self.u_sample_layer_outs = queue.Queue(maxsize=self.cfg.TRAIN.BATCH_SIZE)
+
+    def load_model(self, pretrain):
+        print("Loading Backbone pretrain model from {}......".format(pretrain))
+        model_dict = self.state_dict()
+        pretrain_dict = torch.load(pretrain)["state_dict"]
+        from collections import OrderedDict
+
+        new_dict = OrderedDict()
+
+        for k, v in pretrain_dict.items():
+            if k.startswith("module"):
+                k = k[7:]
+            if "fc" not in k and "classifier" not in k:
+                k = k.replace("backbone.", "")
+                new_dict[k] = v
+
+        model_dict.update(new_dict)
+        self.load_state_dict(model_dict)
+        print("Backbone model has been loaded......")
+
+    def _make_layer(self, block, planes, num_blocks, stride, add_flag=True):
+        strides = [stride] + [1] * (num_blocks - 1)
+        layers = []
+        for stride in strides:
+            layers.append(block(self.in_planes, planes, stride))
+            self.in_planes = planes * block.expansion
+
+        return nn.Sequential(*layers)
+
+    def forward(self, x, **kwargs):
+        out = F.relu(self.bn1(self.conv1(x)))
+        if "feature_cb" in kwargs:
+            out = self.layer1(out)  # 1x16x32x32
+            self.u_sample_layer_outs.put(out)
+            out = self.layer2(out)  # 1x32x16x16
+            out = self.layer3(out)  # 1x64x8x8
+            out = self.cb_block(out)
+            return out
+        elif "feature_rb" in kwargs:
+            out = self.layer1(out)
+
+            u_sample_layer_out = self.u_sample_layer_outs.get()
+            out = img_source_to_target(
+                src_img=out,
+                trg_img=u_sample_layer_out,
+                L=self.cfg.FOURIER.LAMBDA
+            ).cuda()
+
+            out = self.layer2(out)
+            out = self.layer3(out)
+            out = self.rb_block(out)
+            return out
+        else:
+            out = self.layer1(out)  # 1x16x32x32
+            out = self.layer2(out)  # 1x32x16x16
+            out = self.layer3(out)  # 1x64x8x8
+            out1 = self.cb_block(out)
+            out2 = self.rb_block(out)
+            out = torch.cat((out1, out2), dim=1)
+
+        return out
+
+
 def res32_cifar(
-    cfg,
-    pretrain=True,
-    pretrained_model="/data/Data/pretrain_models/resnet50-19c8e357.pth",
-    last_layer_stride=2,
+        cfg,
+        pretrain=True,
+        pretrained_model="/data/Data/pretrain_models/resnet50-19c8e357.pth",
+        last_layer_stride=2,
 ):
     resnet = ResNet_Cifar(BasicBlock, [5, 5, 5])
     if pretrain and pretrained_model != "":
@@ -224,13 +310,28 @@ def res32_cifar(
         print("Choose to train from scratch")
     return resnet
 
+
 def bbn_res32_cifar(
-    cfg,
-    pretrain=True,
-    pretrained_model="/data/Data/pretrain_models/resnet50-19c8e357.pth",
-    last_layer_stride=2,
+        cfg,
+        pretrain=True,
+        pretrained_model="/data/Data/pretrain_models/resnet50-19c8e357.pth",
+        last_layer_stride=2,
 ):
     resnet = BBN_ResNet_Cifar(BasicBlock, [5, 5, 5])
+    if pretrain and pretrained_model != "":
+        resnet.load_model(pretrain=pretrained_model)
+    else:
+        print("Choose to train from scratch")
+    return resnet
+
+
+def bbn_res32_cifar_mix(
+        cfg,
+        pretrain=True,
+        pretrained_model="/data/Data/pretrain_models/resnet50-19c8e357.pth",
+        last_layer_stride=2,
+):
+    resnet = BBN_ResNet_Cifar_Mix(cfg, BasicBlock, [5, 5, 5])
     if pretrain and pretrained_model != "":
         resnet.load_model(pretrain=pretrained_model)
     else:
